@@ -1089,6 +1089,9 @@ impl RaceSolver {
     }
 
     fn call_deactivate_hook(&mut self, skill_id: &str, perspective: Perspective) {
+        let _trace = crate::decision_trace::runner(self.field_index, self.accumulatetime.get(), "effect-end");
+        let _skill = crate::decision_trace::skill(skill_id, 0, "effect-end");
+        crate::decision_trace::event("effect-ended", || crate::json::obj(vec![("position", crate::json::num((self.pos) as f64))]));
         let mut hook = std::mem::replace(&mut self.on_skill_deactivate, noop_hook());
         hook(self, skill_id, perspective);
         self.on_skill_deactivate = hook;
@@ -2080,6 +2083,7 @@ impl RaceSolver {
     }
 
     pub(crate) fn process_skill_priority(&mut self, priority:Option<i32>,field:Option<&RaceField>) {
+        let _trace = crate::decision_trace::runner(self.field_index, self.accumulatetime.get(), "skill-pass");
         self.refresh_skill_scan();
         // Priority zero must still publish additional activations/reservations
         // with an empty list. Priority one has no such end-of-pass work.
@@ -2090,8 +2094,10 @@ impl RaceSolver {
             let i = self.skill_scan.prerequisites[at];
             let sk = &self.pending_skills[i];
             if priority.is_some_and(|p|p!=sk.priority) {continue;}
+            let _trace = crate::decision_trace::skill(&sk.skill_id, sk.detail_index, "precondition");
             let satisfied = !sk.prerequisite_satisfied
                 && sk.prerequisite.as_ref().is_some_and(|check| check(self, field));
+            crate::decision_trace::gate("precondition-latched", satisfied);
             if satisfied { self.pending_skills[i].prerequisite_satisfied = true; }
         }
         let pending = &self.pending_skills;
@@ -2152,11 +2158,13 @@ impl RaceSolver {
                 continue;
             }
             let sk = &self.pending_skills[j];
-            let fires = (sk.prerequisite.is_none() || sk.prerequisite_satisfied)
-                && (field.is_some() || sk.effects.iter().all(|ef| ef.target == 1))
-                && self.pending_cooldown_ready(sk)
-                && sk.windows.iter().any(|r| r.start <= pos && pos < r.end)
-                && (sk.extra_condition)(self, field);
+            let _trace = crate::decision_trace::skill(&sk.skill_id, sk.detail_index, "activation");
+            let fires = crate::decision_trace::gate("precondition-ready", sk.prerequisite.is_none() || sk.prerequisite_satisfied)
+                && crate::decision_trace::gate("target-available", field.is_some() || sk.effects.iter().all(|ef| ef.target == 1))
+                && crate::decision_trace::gate("cooldown-ready", self.pending_cooldown_ready(sk))
+                && crate::decision_trace::gate("sampled-window", sk.windows.iter().any(|r| r.start <= pos && pos < r.end))
+                && crate::decision_trace::gate("condition", (sk.extra_condition)(self, field));
+            crate::decision_trace::gate("activation-ready", fires);
             if fires {
                 let sk = &self.pending_skills[j];
                 let (sid, perspective, rarity, effects, green, cooldown, cooldown_key) =
@@ -2218,6 +2226,7 @@ impl RaceSolver {
                 Some(1) => self.skill_scan.priority_one[remaining],
                 _ => remaining,
             };
+            let _trace = crate::decision_trace::skill(&self.pending_skills[i].skill_id, self.pending_skills[i].detail_index, "activation");
             if self.retail.is_some() {
                 if let Some(window) = self.skill_scan.windows.get(i) {
                     if priority.is_some_and(|p| p != window.priority) { continue; }
@@ -2228,6 +2237,7 @@ impl RaceSolver {
                     {
                         // Even an inactive detail takes its turn in the ordered
                         // additional-effect pass. Later activations must see it.
+                        crate::decision_trace::gate("trigger-window", false);
                         self.additional_turn_floor = self.additional_turn_floor.max(window.numeric_id);
                         continue;
                     }
@@ -2262,19 +2272,20 @@ impl RaceSolver {
                 }
                 let field_ok = || field.is_some() || sk.effects.iter().all(|ef| ef.target == 1);
                 let fires = if reserved {
-                    field_ok() && self.pending_cooldown_ready(sk)
-                } else if pos >= w.start && pos < w.end
-                    && (sk.prerequisite.is_none() || sk.prerequisite_satisfied)
-                    && (w.single || sk.windows.iter().any(|r| r.start <= pos && pos < r.end)) {
+                    crate::decision_trace::gate("target-available", field_ok()) && crate::decision_trace::gate("cooldown-ready", self.pending_cooldown_ready(sk))
+                } else if crate::decision_trace::gate("trigger-window", pos >= w.start && pos < w.end)
+                    && crate::decision_trace::gate("precondition-ready", sk.prerequisite.is_none() || sk.prerequisite_satisfied)
+                    && (w.single || crate::decision_trace::gate("sampled-window", sk.windows.iter().any(|r| r.start <= pos && pos < r.end))) {
                     if sk.stateful_check {
-                        (sk.extra_condition)(self, field) && field_ok() && self.pending_cooldown_ready(sk)
+                        crate::decision_trace::gate("condition", (sk.extra_condition)(self, field)) && crate::decision_trace::gate("target-available", field_ok()) && crate::decision_trace::gate("cooldown-ready", self.pending_cooldown_ready(sk))
                     } else {
                         // A blocked cooldown rejects the activation whatever a
                         // stateless condition returns, so test it first.
-                        self.pending_cooldown_ready(sk) && (sk.extra_condition)(self, field) && field_ok()
+                        crate::decision_trace::gate("cooldown-ready", self.pending_cooldown_ready(sk)) && crate::decision_trace::gate("condition", (sk.extra_condition)(self, field)) && crate::decision_trace::gate("target-available", field_ok())
                     }
                 } else { false };
-                if fires && self.fire_pending_skill(i, field) {
+                crate::decision_trace::gate("activation-ready", fires);
+            if fires && self.fire_pending_skill(i, field) {
                     activate_count_this_frame += 1;
                 }
                 continue;
@@ -2305,12 +2316,13 @@ impl RaceSolver {
                 assert!(sk.windows.len() == 1 && sk.windows[0].start.to_bits() == sk.trigger.start.to_bits()
                     && sk.windows[0].end.to_bits() == sk.trigger.end.to_bits());
             }
-            let fires = (reserved || (pos >= sk.trigger.start && pos < sk.trigger.end
-                && (sk.prerequisite.is_none() || sk.prerequisite_satisfied)
-                && (single || sk.windows.iter().any(|r| r.start <= pos && pos < r.end))
-                && (sk.extra_condition)(self, field)))
-                && (field.is_some() || sk.effects.iter().all(|ef| ef.target == 1))
-                && self.pending_cooldown_ready(sk);
+            let fires = (reserved || (crate::decision_trace::gate("trigger-window", pos >= sk.trigger.start && pos < sk.trigger.end)
+                && crate::decision_trace::gate("precondition-ready", sk.prerequisite.is_none() || sk.prerequisite_satisfied)
+                && (single || crate::decision_trace::gate("sampled-window", sk.windows.iter().any(|r| r.start <= pos && pos < r.end)))
+                && crate::decision_trace::gate("condition", (sk.extra_condition)(self, field))))
+                && crate::decision_trace::gate("target-available", field.is_some() || sk.effects.iter().all(|ef| ef.target == 1))
+                && crate::decision_trace::gate("cooldown-ready", self.pending_cooldown_ready(sk));
+            crate::decision_trace::gate("activation-ready", fires);
             if fires && self.fire_pending_skill(i, field) {
                 activate_count_this_frame += 1;
             }
@@ -2435,6 +2447,10 @@ impl RaceSolver {
     }
 
     fn start_skill_cooldown(&mut self,key:String,duration:f64) {
+        let _trace = crate::decision_trace::runner(self.field_index, self.accumulatetime.get(), "cooldown");
+        crate::decision_trace::event("cooldown-start", || crate::json::obj(vec![
+            ("key", crate::json::Value::String(key.clone())), ("baseDuration", crate::json::num(duration)),
+            ("distance", crate::json::num(self.course.distance))]));
         self.cooldown_generation += 1;
         if self.retail.is_some() {
             let remaining=(duration as f32)*(self.course.distance as f32/1000.);
@@ -2444,6 +2460,9 @@ impl RaceSolver {
     }
 
     fn activate_skill(&mut self, skill_id: &str, perspective: Perspective, rarity: SkillRarity, effects: &[SkillEffect], has_green_tag: bool, detail_index: usize, field: Option<&RaceField>) {
+        let _trace = crate::decision_trace::runner(self.field_index, self.accumulatetime.get(), "activation");
+        let _skill = crate::decision_trace::skill(skill_id, detail_index, "activation");
+        crate::decision_trace::event("skill-activated", || crate::json::obj(vec![("position", crate::json::num((self.pos) as f64))]));
         let targets = self.apply_activation(skill_id, perspective, rarity, effects, has_green_tag, field, false, None, false, detail_index);
         if perspective == Perspective::Self_ && skill_id.parse::<i64>().is_ok() {
             self.skill_detail_events.push((skill_id.to_string(), detail_index, self.accumulatetime.get()));
@@ -2456,6 +2475,8 @@ impl RaceSolver {
     }
 
     fn apply_activation(&mut self, skill_id: &str, perspective: Perspective, rarity: SkillRarity, effects: &[SkillEffect], has_green_tag: bool, field: Option<&RaceField>, follow_up: bool, duration_override: Option<f64>, reselect_targets: bool, detail_index: usize) -> Vec<Option<Vec<usize>>> {
+        let _trace = crate::decision_trace::runner(self.field_index, self.accumulatetime.get(), "effects");
+        let _skill = crate::decision_trace::skill(skill_id, detail_index, "effects");
         // ExtendEvolvedDuration must apply after other effects on the same
         // skill, so it doesn't extend its own siblings' durations.
         let mut effect_order: Vec<usize> = (0..effects.len()).collect();
@@ -2511,6 +2532,7 @@ impl RaceSolver {
             let scaled_duration = if skill_id == "asitame" && self.retail.is_some() {
                 self.conserve_release_duration()
             } else { scaled_duration };
+            crate::decision_trace::event("effect-evaluated", || crate::json::obj(vec![("type", crate::json::num((ef.effect_type as i32) as f64)),("ability", crate::json::num((ability_index) as f64)),("modifier", crate::json::num((modifier) as f64)),("duration", crate::json::num((scaled_duration) as f64)),("followUp", crate::json::Value::Bool(follow_up))]));
             runtime_duration = runtime_duration.max(scaled_duration);
             if !follow_up && perspective == Perspective::Self_ {
                 let null = matches!(ef.effect_type, SkillType::Noop | SkillType::Runaway);
@@ -2522,12 +2544,13 @@ impl RaceSolver {
                     self.initial_ability_activations.push((kind, value));
                 }
             }
-            if ef.additional_activate != 0 && !follow_up { delayed.push((*ef, 0)); continue; }
-            if (!follow_up || reselect_targets) && ef.target == 1 && ef.target_is_debuff && self.is_debuff_immune() { continue; }
+            if ef.additional_activate != 0 && !follow_up { crate::decision_trace::event("effect-deferred", || crate::json::obj(vec![("ability", crate::json::num((ability_index) as f64))])); delayed.push((*ef, 0)); continue; }
+            if (!follow_up || reselect_targets) && ef.target == 1 && ef.target_is_debuff && self.is_debuff_immune() { crate::decision_trace::event("effect-immune", || crate::json::obj(vec![("ability", crate::json::num((ability_index) as f64))])); continue; }
             if ef.target != 1 && (!follow_up || reselect_targets) {
                 if let Some(f) = field {
                     let targets = selected_targets[ability_index].take();
                     selected_targets[ability_index] = Some(f.queue_skill_effect(self, skill_id, rarity, *ef, modifier, scaled_duration, targets));
+                    crate::decision_trace::event("effect-queued", || crate::json::obj(vec![("ability", crate::json::num((ability_index) as f64)),("targets", crate::json::arr(selected_targets[ability_index].as_ref().unwrap().iter().map(|i| crate::json::num(*i as f64)).collect()))]));
                     if scaled_duration > 0.0 {
                         let timer = self.new_skill_timer(scaled_duration);
                         self.active_aux_skills.push(ActiveSkill { token: 0, skill_id: skill_id.to_string(), perspective,
@@ -2536,6 +2559,7 @@ impl RaceSolver {
                 }
                 continue;
             }
+            crate::decision_trace::event("effect-applied", || crate::json::obj(vec![("ability", crate::json::num((ability_index) as f64)),("type", crate::json::num((ef.effect_type as i32) as f64)),("modifier", crate::json::num((modifier) as f64)),("duration", crate::json::num((scaled_duration) as f64))]));
             match ef.effect_type {
                 SkillType::DebuffImmunity => {
                     let timer = self.new_skill_timer(scaled_duration);

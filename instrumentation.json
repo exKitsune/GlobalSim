@@ -1,0 +1,10 @@
+{
+  "upstreamCommit": "95f1416fb8c130dd2ef4b53c3b8277c6ba4c8055",
+  "schema": "umalytics-decisions-v2",
+  "files": {
+    "simulation/instrumentation/engine.patch": "87c304bdc50ee4d2f5f8232d0bdb3b164667d75c4c9030a771ffab6241605da7",
+    "simulation/instrumentation/decision_trace.rs": "79c9aecc51643fba182aa334dadcc13243705173f3f67c8ab5ac83295ed5e2c7"
+  },
+  "sha256": "d23c2af6aed6e10d77751b8b740e3bb3ba7fa7f393a9f933763d0b9edffe89fd",
+  "sourceSha256": "52f17d5c8cc36ca6345ea1e5e30a43469654d8cb431fd92c2c2fdc445acf44e9"
+}

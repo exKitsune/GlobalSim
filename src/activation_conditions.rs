@@ -1398,7 +1398,7 @@ pub enum Op {
     /// Immutable parsed structure is shared; sampled windows belong to this call.
     Shared(std::rc::Rc<Op>, Vec<crate::retail_initialization::Windows>),
     Sampled(usize),
-    Cmp { cond: &'static Condition, kind: CmpKind, arg: f64 },
+    Cmp { name: String, cond: &'static Condition, kind: CmpKind, arg: f64 },
     And(Box<Op>, Box<Op>, SamplePolicy),
     Or(Box<Op>, Box<Op>, SamplePolicy),
 }
@@ -1428,7 +1428,7 @@ impl Op {
                 Ok((rmap_multi(regions, |r| windows.iter().map(|&(start,end)|
                     r.intersect(&Region::new(start as f64,end as f64))).collect()),None))
             }
-            Op::Cmp { cond, kind, arg } => {
+            Op::Cmp { name, cond, kind, arg } => {
                 let f = match kind {
                     CmpKind::Eq => &cond.filter_eq,
                     CmpKind::Neq => &cond.filter_neq,
@@ -1437,7 +1437,19 @@ impl Op {
                     CmpKind::Gt => &cond.filter_gt,
                     CmpKind::Gte => &cond.filter_gte,
                 };
-                f(regions, *arg, course, horse, extra)
+                let (windows, predicate) = f(regions, *arg, course, horse, extra)?;
+                let operator = match kind { CmpKind::Eq => "==", CmpKind::Neq => "!=", CmpKind::Lt => "<", CmpKind::Lte => "<=", CmpKind::Gt => ">", CmpKind::Gte => ">=" };
+                crate::decision_trace::event("static-condition", || crate::json::obj(vec![
+                    ("predicate", crate::json::Value::String(name.clone())), ("operator", crate::json::Value::String(operator.into())),
+                    ("argument", crate::json::num(*arg)), ("dynamic", crate::json::Value::Bool(predicate.is_some())),
+                    ("windows", crate::json::arr(windows.iter().map(|r| crate::json::arr(vec![crate::json::num(r.start),crate::json::num(r.end)])).collect()))]));
+                if !crate::decision_trace::enabled() { return Ok((windows, predicate)); }
+                let name = format!("{}{}{}", name, operator, arg);
+                let predicate = predicate.map(|original| -> DynCond { std::rc::Rc::new(move |s, field| {
+                    let result = original(s, field);
+                    crate::decision_trace::gate(&name, result)
+                }) });
+                Ok((windows, predicate))
             }
             Op::And(left, right, _) => {
                 let (leftval, leftcond) = left.apply_sampled(regions, course, horse, extra, sampled)?;

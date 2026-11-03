@@ -18,6 +18,8 @@ fn conditions() -> &'static BTreeMap<String, activation_conditions::Condition> {
 /// calling thread. The handle cannot be sent between threads or shared by them.
 pub struct PreparedRace {
     spec: RaceSpec,
+    decision_trace: bool,
+    trace_diagnostics: bool,
     skills: Rc<SkillTable>,
     initialization: Option<retail_initialization::PreparedInitialization>,
     retail_sections: bool,
@@ -87,7 +89,7 @@ impl PreparedRace {
             Some(retail_initialization::PreparedInitialization::new(&horses, course, raw_skills,
                 bundled_parameters()?.get("parameters").ok_or("Missing retail parameters")?)?)
         } else { None };
-        Ok(Self { spec, skills, initialization, retail_sections, retail_runtime,
+        Ok(Self { trace_diagnostics: input.get("traceDiagnostics").and_then(Value::as_bool) == Some(true), decision_trace: input.get("decisionTrace").and_then(Value::as_bool) == Some(true), spec, skills, initialization, retail_sections, retail_runtime,
             world_geometry, startup_pass, retain_all_frames: input.get("retainAllFrames").and_then(Value::as_bool) == Some(true),
             gate_perm, signature: input.get("dataSignature").cloned(), roster: None })
     }
@@ -101,6 +103,7 @@ impl PreparedRace {
     /// `run` as the worker's reply value. Without `capture_frames` the reply
     /// carries no replay frames or frame metadata; every other key is unchanged.
     pub(crate) fn run_value(&mut self, seed: i64, capture_frames: bool) -> Result<Value, String> {
+        let _trace_session = decision_trace::Session::new(self.decision_trace, self.trace_diagnostics);
         self.spec.seed = seed;
         let initialization = self.initialization.as_ref().map(|plan| {
             let seed = i32::try_from(seed).map_err(|_| "Retail seed must be a signed 32-bit integer".to_string())?;
@@ -115,6 +118,7 @@ impl PreparedRace {
             if let Some(signature) = &self.signature { map.insert("dataSignature".into(), signature.clone()); }
         }
         if let Some(perm) = &self.gate_perm { restore_request_order(&mut value, perm); }
+        if let (Value::Object(map), Some(trace)) = (&mut value, decision_trace::finish(self.gate_perm.as_deref())) { map.insert("decisionTrace".into(), trace); }
         Ok(value)
     }
 }

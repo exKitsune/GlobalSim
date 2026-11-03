@@ -850,6 +850,7 @@ impl RaceSolver {
     }
 
     fn update_retail_pace(&mut self, dt: f32, field: Option<&RaceField>) {
+        let _trace = crate::decision_trace::runner(self.field_index, self.accumulatetime.get(), "position-keep");
         let reference_strategy = self.horse.strategy;
         // Match the pace controller's temporary style while rushing.
         #[cfg(feature = "experimental-pacemaker-staging")]
@@ -928,6 +929,7 @@ impl RaceSolver {
     }
 
     fn update_retail_spurt(&mut self) {
+        let _trace = crate::decision_trace::runner(self.field_index, self.accumulatetime.get(), "spurt");
         if self.phase < 2 {
             return;
         }
@@ -970,6 +972,7 @@ impl RaceSolver {
         &mut self, dt: f32, field: Option<&RaceField>, roster: Option<&[retail_lane::Horse]>,
         sorted: Option<(&[usize], &[usize])>,
     ) -> f64 {
+        let _trace = crate::decision_trace::runner(self.field_index, self.accumulatetime.get(), "movement");
         self.retail.as_mut().unwrap().live_roster_dirty = false;
         let mut roster = roster;
         if !self.retail.as_ref().unwrap().prepared {
@@ -1265,12 +1268,29 @@ impl RaceSolver {
         if self.start_dash {
             speed = speed.min(dash_limit);
         }
+        let unclamped = speed;
         speed = speed.min(cap).max(minimum);
         self.current_speed = speed as f64;
-        let actual = (self.retail_current_speed(speed as f64) as f32)
-            .max(minimum)
-            .min(cap);
+        let skill_adjusted = self.retail_current_speed(speed as f64) as f32;
+        let actual = skill_adjusted.max(minimum).min(cap);
         self.retail.as_mut().unwrap().observed_speed = actual;
+        if crate::decision_trace::enabled() {
+            let r = self.retail.as_ref().unwrap();
+            let mode = match r.pace.mode { None => 0., Some(pace::Mode::SpeedUp) => 1., Some(pace::Mode::Overtake) => 2., Some(pace::Mode::PaceUp) => 3., Some(pace::Mode::PaceDown) => 4., Some(pace::Mode::Extra) => 5. };
+            crate::decision_trace::motion(&[
+                dt as f64, self.pos, self.hp.hp_value().unwrap_or(f64::NAN), self.lane, self.target_speed, base as f64, section as f64,
+                self.pos_keep_speed_coef, acceleration as f64, unclamped as f64, cap as f64, minimum as f64,
+                blocker.map_or(-1., |(i,_)| i as f64), blocker.map_or(0., |(_,gap)| gap as f64),
+                speed as f64, skill_adjusted as f64, actual as f64,
+                (unclamped.max(minimum)-speed).max(0.) as f64, (skill_adjusted.max(minimum)-actual).max(0.) as f64,
+                self.phase as f64, self.is_last_spurt as u8 as f64, r.spurt.start as f64, r.spurt.speed as f64,
+                r.spurt.result as f64, r.spurt.count as f64, self.rushing_mode as f64, self.is_downhill_mode as u8 as f64,
+                mode, r.lane.force_in as u8 as f64, r.force_in_coefficient as f64, self.lane_target,
+                self.spot_struggle_active as u8 as f64, self.duel_active as u8 as f64, self.cp_acc,
+                self.blocked_front_timer.get(), self.blocked_side_timer.get(), self.blocked_all_timer.get(),
+                self.infront_near_lane_timer.get(), self.behind_near_lane_timer.get(), self.overtake_target_time,
+            ]);
+        }
         let mut distance = actual * dt;
         if gate_fraction != 1. {
             distance = (distance as f64 * gate_fraction) as f32;

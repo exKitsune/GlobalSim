@@ -12,6 +12,7 @@ mod conserve_power;
 mod horse_types;
 mod hp_policy;
 mod json;
+pub mod decision_trace;
 mod replay_worker;
 mod replay_frames;
 mod binary_replay;
@@ -608,6 +609,7 @@ fn run_race(spec: &RaceSpec, conditions: &'static BTreeMap<String, activation_co
     }
     let mut solvers = Vec::with_capacity(spec.horses.len());
     for (i, h) in spec.horses.iter().enumerate() {
+        let _trace = decision_trace::runner(Some(i), 0., "build");
         let mut builder = new_builder(conditions, spec.seed, i, spec, h, retail_runtime, prepared_roster)?;
         builder.retail_initialization=retail.map(|init|init.horses[i].clone());
         if let Some(row)=&mut builder.retail_initialization {row.runtime_phase=retail_runtime;}
@@ -726,6 +728,7 @@ fn run_race(spec: &RaceSpec, conditions: &'static BTreeMap<String, activation_co
                 if retail.is_some() {return Err(error);}
                 let mut retry = new_builder(conditions, spec.seed, i, spec, h, retail_runtime, prepared_roster)?;
                 for (skill_id, level, _is_unique) in &h.skills {
+                    decision_trace::incomplete();
                     if !is_usable(&mut skill_usable, conditions, spec, h, i, skill_id, *level, prepared_roster) {
                         continue;
                     }
@@ -786,6 +789,14 @@ fn run_race(spec: &RaceSpec, conditions: &'static BTreeMap<String, activation_co
     // Gives every solver live awareness of the rest of the field (order/
     // rank, gaps to the horse ahead/behind) -- not part of the original TS
     // engine, which has no notion of other horses at all.
+    for (i, solver) in solvers.iter().enumerate() {
+        let _trace = decision_trace::runner(Some(i), 0., "initial-stats");
+        decision_trace::event("initial-stats", || json::obj(vec![
+            ("speed", json::num(solver.horse.speed)), ("stamina", json::num(solver.horse.stamina)),
+            ("power", json::num(solver.horse.power)), ("guts", json::num(solver.horse.guts)),
+            ("wisdom", json::num(solver.horse.wisdom)),
+        ]));
+    }
     // Snapshot adjusted initial stat ranks before runtime skill expiry/changes.
     // The result ranks treat approximately equal float stats as ties and
     // resolve those by gate identity, including one-ULP mood differences.
@@ -860,6 +871,7 @@ fn run_race(spec: &RaceSpec, conditions: &'static BTreeMap<String, activation_co
         ranks.clear();
         ranks.extend((0..n).map(|i| field.order_of(i)));
         let leaders = style_leaders.update(&ranks);
+        decision_trace::tick();
         field.step_all(dt, visited);
         for &i in visited {
             let s = field.solvers[i].borrow();
@@ -1462,6 +1474,7 @@ fn legacy_reply(spec_json: Value, capture_frames: bool,
     conditions: &'static BTreeMap<String, activation_conditions::Condition>, last_skill_data: &mut Option<Value>,
     skill_facts: &mut retail_initialization::SkillFactsCache,
     replay_worker: Option<&mut replay_worker::ReplayWorker>) -> Result<Value, String> {
+    let _trace_session = decision_trace::Session::new(spec_json.get("decisionTrace").and_then(Value::as_bool) == Some(true), spec_json.get("traceDiagnostics").and_then(Value::as_bool) == Some(true));
     // v23: the retail runtime runs the field in gate order (see gate_order).
     let (spec_json, gate_perm) = gate_order(spec_json)?;
     let skill_data = match spec_json.get("skillData") {
@@ -1535,6 +1548,7 @@ fn legacy_reply(spec_json: Value, capture_frames: bool,
     if let Some(perm) = &gate_perm {
         restore_request_order(&mut result, perm);
     }
+    if let (Value::Object(map), Some(trace)) = (&mut result, decision_trace::finish(gate_perm.as_deref())) { map.insert("decisionTrace".into(), trace); }
     Ok(result)
 }
 

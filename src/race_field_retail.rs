@@ -206,6 +206,8 @@ impl RaceField {
         if before_sorted { resort_by_position(before_order, before_slot, rows); }
         let any_straight = rows.iter().any(|row| row.2);
         for &i in indices {
+            let time = self.solvers[i].borrow().accumulatetime.get();
+            let _trace = crate::decision_trace::runner(Some(i), time, "field-pass");
             let mut s = self.solvers[i].borrow_mut();
             s.collect_retail_duel_proximity(&rows, any_straight, dt);
             let position = s.pos as f32;
@@ -219,12 +221,16 @@ impl RaceField {
                 before_sorted.then_some((&before_order[..], &before_slot[..])));
         }
         for &i in indices {
+            let time = self.solvers[i].borrow().accumulatetime.get();
+            let _trace = crate::decision_trace::runner(Some(i), time, "field-pass");
             self.solvers[i]
                 .borrow_mut()
                 .prepare_retail_tick(dt, Some(self), false);
         }
         for priority in [1, 0] {
             for &i in indices {
+            let time = self.solvers[i].borrow().accumulatetime.get();
+            let _trace = crate::decision_trace::runner(Some(i), time, "field-pass");
                 self.solvers[i]
                     .borrow_mut()
                     .process_skill_priority(Some(priority), Some(self));
@@ -243,6 +249,8 @@ impl RaceField {
         let sorted = rows.iter().all(|row| row.0.is_finite());
         if sorted { resort_by_position(by_position, slot, rows); }
         for &i in indices {
+            let time = self.solvers[i].borrow().accumulatetime.get();
+            let _trace = crate::decision_trace::runner(Some(i), time, "field-pass");
             let block = self.retail_block.unwrap();
             let (front, side) = if sorted {
                 blocking_sample_sorted(i, rows, by_position, slot, block)
@@ -264,6 +272,8 @@ impl RaceField {
         advanced.clear();
         advanced.reserve(indices.len());
         for &i in indices {
+            let time = self.solvers[i].borrow().accumulatetime.get();
+            let _trace = crate::decision_trace::runner(Some(i), time, "field-pass");
             let (elapsed, dirty) = {
                 let mut s = self.solvers[i].borrow_mut();
                 let elapsed = s.step_forward_retail_with_roster(dt, Some(self), Some(roster),

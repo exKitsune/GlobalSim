@@ -56,12 +56,12 @@ pub fn choose(
     consumption: impl Fn(f32) -> f32,
     rng: &mut impl RandomSource,
 ) -> Plan {
+    crate::decision_trace::event("spurt-input", || crate::json::obj(vec![("distance", crate::json::num((input.distance) as f64)),("position", crate::json::num((input.position) as f64)),("hp", crate::json::num((input.hp) as f64)),("max_speed", crate::json::num((input.max_speed) as f64)),("base_speed", crate::json::num((input.base_speed) as f64)),("wisdom", crate::json::num((input.wisdom) as f64))]));
     let remaining = ((input.distance - input.position) - parameters.buffer).max(0.);
     let base_cost = consumption(input.base_speed);
-    let finish = |start, speed, result| Plan {
-        start,
-        speed,
-        result,
+    let finish = |start: f32, speed: f32, result: i32| {
+        crate::decision_trace::event("spurt-plan", || crate::json::obj(vec![("start", crate::json::num((start) as f64)),("speed", crate::json::num((speed) as f64)),("result", crate::json::num((result) as f64))]));
+        Plan { start, speed, result }
     };
     if input.hp < (remaining / input.base_speed) * base_cost {
         return finish(input.distance, input.max_speed, 4);
@@ -83,6 +83,7 @@ pub fn choose(
             let slow_cost = slow_time * base_cost;
             let needed = slow_cost as f64 + fast_time as f64 * cost as f64;
             let start = (input.distance - parameters.buffer) - sprint_distance;
+            crate::decision_trace::event("spurt-search", || crate::json::obj(vec![("speed", crate::json::num((speed) as f64)),("start", crate::json::num((start) as f64)),("needed", crate::json::num((needed) as f64)),("feasible", crate::json::Value::Bool(input.hp as f64 >= needed && start < latest))]));
             if input.hp as f64 >= needed && start < latest {
                 return Some(Candidate {
                     start,
@@ -125,11 +126,14 @@ pub fn choose(
     }
     sort_candidates(&mut candidates);
     let chance = 15. + 0.05f32 * input.wisdom;
-    for candidate in &candidates {
-        if (rng.integer(0, 100) as f32) < chance {
+    for (index,candidate) in candidates.iter().enumerate() {
+        let roll = rng.integer(0, 100);
+        crate::decision_trace::event("spurt-roll", || crate::json::obj(vec![("index", crate::json::num((index) as f64)),("roll", crate::json::num((roll) as f64)),("threshold", crate::json::num((chance) as f64)),("passed", crate::json::Value::Bool((roll as f32) < chance)),("start", crate::json::num((candidate.start) as f64)),("speed", crate::json::num((candidate.speed) as f64)),("time", crate::json::num((candidate.time) as f64))]));
+        if (roll as f32) < chance {
             return finish(input.position.max(candidate.start), candidate.speed, 2);
         }
     }
+    crate::decision_trace::event("spurt-fallback", || crate::json::obj(vec![("reason", crate::json::Value::String(("all-rolls-failed").to_string()))]));
     let last = candidates.last().unwrap();
     finish(input.position.max(last.start), last.speed, 2)
 }
@@ -168,6 +172,7 @@ impl SpurtState {
                     };
                 }
             }
+            crate::decision_trace::event("spurt-accepted", || crate::json::obj(vec![("start", crate::json::num((self.start) as f64)),("speed", crate::json::num((self.speed) as f64)),("result", crate::json::num((self.result) as f64)),("count", crate::json::num((self.count) as f64))]));
             self.pending = false;
         }
         matches!(self.result, 1 | 2) && self.start > 0. && position >= self.start

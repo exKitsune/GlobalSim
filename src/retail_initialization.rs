@@ -193,12 +193,22 @@ fn sample_trigger(name:&str,arg:i32,rng:&mut RetailRandom,course:&Value)->Result
     Ok(Windows::Distances(windows))
 }
 
+fn trace_trigger(trigger: &Trigger) {
+    crate::decision_trace::event("sampled-trigger", || crate::json::obj(vec![
+        ("predicate", Value::String(trigger.name.clone())), ("field", Value::String(trigger.field.clone())),
+        ("alternative", crate::json::num(trigger.alternative as f64)), ("argument", crate::json::num(trigger.argument as f64)),
+        ("drawStart", crate::json::num(trigger.draw_start as f64)), ("drawEnd", crate::json::num(trigger.draw_end as f64)),
+        ("windows", crate::decision_trace::windows(&trigger.windows))]));
+}
+
 pub fn initialize(seed:i32,horses:&[Value],course:&Value,skills:&Value,parameters:&Value)->Result<Initialization,String> {
     let mut rng=RetailRandom::new(seed);
     let mut rows:Vec<HorseInitialization>=(0..horses.len()).map(|_|HorseInitialization::default()).collect();
-    for (horse,row) in horses.iter().zip(rows.iter_mut()) {
+    for (i,(horse,row)) in horses.iter().zip(rows.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
         for entry in horse.get_array("skills")? {
             let sid=skill_id(entry)?;
+            let _skill = crate::decision_trace::skill(&sid, 0, "initialization");
             for (alternative,alt) in field(skills,&sid)?.get_array("alternatives")?.iter().enumerate() {
                 for column in ["precondition","condition"] {
                     for (name,operator,argument) in terms(alt.get(column).and_then(Value::as_str).unwrap_or("")) {
@@ -208,6 +218,7 @@ pub fn initialize(seed:i32,horses:&[Value],course:&Value,skills:&Value,parameter
                         let windows=sample_trigger(&name,argument,&mut rng,course)?;
                         row.triggers.push(Trigger {skill_id:sid.clone(),alternative,field:column.into(),name,argument,
                             windows,draw_start,draw_end:rng.draw_count});
+                        crate::decision_trace::event("sampled-trigger", || crate::json::obj(vec![("predicate", crate::json::Value::String((&row.triggers.last().unwrap().name).to_string())),("field", crate::json::Value::String((column).to_string())),("alternative", crate::json::num((alternative) as f64)),("argument", crate::json::num((argument) as f64)),("drawStart", crate::json::num((draw_start) as f64)),("drawEnd", crate::json::num((rng.draw_count) as f64)),("windows", crate::decision_trace::windows(&row.triggers.last().unwrap().windows))]));
                     }
                 }
             }
@@ -215,7 +226,8 @@ pub fn initialize(seed:i32,horses:&[Value],course:&Value,skills:&Value,parameter
     }
     let mut stages=BTreeMap::from([("after_triggers".into(),rng.draw_count)]);
     let styles=["","RunningOut","Proceding","Insertion","Chasing"];
-    for (horse,row) in horses.iter().zip(rows.iter_mut()) {
+    for (i,(horse,row)) in horses.iter().zip(rows.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
         let style=horse.get_i64("running_style")?;
         let coefficient=if (1..=4).contains(&style) {number(parameters,&format!("forceInMoveTargetSpeedAdd{}",styles[style as usize]))?} else {0.0};
         let span=number(parameters,"forceInMoveTargetSpeedAddRandomRange")?;
@@ -223,19 +235,27 @@ pub fn initialize(seed:i32,horses:&[Value],course:&Value,skills:&Value,parameter
         row.force_in_move_coefficient=coefficient+offset;
     }
     stages.insert("after_ai".into(),rng.draw_count);
-    for (horse,row) in horses.iter().zip(rows.iter_mut()) {
+    for (i,(horse,row)) in horses.iter().zip(rows.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
         let chance=(100.0-9000.0/number(horse,"base_wisdom")?).max(20.0);
         for entry in horse.get_array("skills")? {
             let sid=skill_id(entry)?;
-            let enabled=field(skills,&sid)?.get_i64("wisdomCheck")?!=1 || chance>rng.real(0.0,100.0);
+            let _skill = crate::decision_trace::skill(&sid, 0, "initialization");
+            let checked=field(skills,&sid)?.get_i64("wisdomCheck")?==1;
+            let draw_start = rng.draw_count;
+            let roll=if checked {Some(rng.real(0.0,100.0))} else {None};
+            let enabled=roll.is_none_or(|value| chance>value);
+            crate::decision_trace::event("skill-wit", || crate::json::obj(vec![("checked", Value::Bool(checked)),("roll", roll.map_or(Value::Null, |v| crate::json::num(v as f64))),("threshold", crate::json::num((chance) as f64)),("passed", Value::Bool(enabled)),("drawStart", crate::json::num((draw_start) as f64)),("drawEnd", crate::json::num((rng.draw_count) as f64))]));
             row.skill_enabled.insert(sid,enabled);
         }
     }
     stages.insert("after_wisdom".into(),rng.draw_count);
-    for (horse,row) in horses.iter().zip(rows.iter_mut()) {
+    for (i,(horse,row)) in horses.iter().zip(rows.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
         let mut multiplier=1.0f32;
         for entry in horse.get_array("skills")? {
             let sid=skill_id(entry)?;
+            let _skill = crate::decision_trace::skill(&sid, 0, "initialization");
             if !row.skill_enabled[&sid] {continue;}
             for alt in field(skills,&sid)?.get_array("alternatives")? {
                 if alt.get_str("condition")?!="always==1" || !alt.get("precondition").and_then(Value::as_str).unwrap_or("").is_empty() {continue;}
@@ -319,19 +339,23 @@ pub fn initialize_cached(seed:i32,horses:&[Value],course:&Value,skills:&Value,pa
     }
     let mut rng=RetailRandom::new(seed);
     let mut rows:Vec<HorseInitialization>=(0..horses.len()).map(|_|HorseInitialization::default()).collect();
-    for (skills,row) in decoded.iter().zip(rows.iter_mut()) {
+    for (i,(skills,row)) in decoded.iter().zip(rows.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
         for (sid,facts) in skills {
+            let _skill = crate::decision_trace::skill(sid, 0, "initialization");
             for (alternative,column,name,argument) in &facts.random_terms {
                 let draw_start=rng.draw_count;
                 let windows=sample_trigger(name,*argument,&mut rng,course)?;
                 row.triggers.push(Trigger {skill_id:sid.clone(),alternative:*alternative,field:(*column).into(),
                     name:name.clone(),argument:*argument,windows,draw_start,draw_end:rng.draw_count});
+                trace_trigger(row.triggers.last().unwrap());
             }
         }
     }
     let mut stages=BTreeMap::from([("after_triggers".into(),rng.draw_count)]);
     let styles=["","RunningOut","Proceding","Insertion","Chasing"];
-    for (horse,row) in horses.iter().zip(rows.iter_mut()) {
+    for (i,(horse,row)) in horses.iter().zip(rows.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
         let style=horse.get_i64("running_style")?;
         let coefficient=if (1..=4).contains(&style) {number(parameters,&format!("forceInMoveTargetSpeedAdd{}",styles[style as usize]))?} else {0.0};
         let span=number(parameters,"forceInMoveTargetSpeedAddRandomRange")?;
@@ -339,15 +363,24 @@ pub fn initialize_cached(seed:i32,horses:&[Value],course:&Value,skills:&Value,pa
         row.force_in_move_coefficient=coefficient+offset;
     }
     stages.insert("after_ai".into(),rng.draw_count);
-    for ((horse,skills),row) in horses.iter().zip(&decoded).zip(rows.iter_mut()) {
+    for (i,((horse,skills),row)) in horses.iter().zip(&decoded).zip(rows.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
         let chance=(100.0-9000.0/number(horse,"base_wisdom")?).max(20.0);
         for (sid,facts) in skills {
-            let enabled=!facts.wisdom_checked || chance>rng.real(0.0,100.0);
+            let _skill = crate::decision_trace::skill(sid, 0, "initialization");
+            let draw_start = rng.draw_count;
+            let roll = if facts.wisdom_checked { Some(rng.real(0., 100.)) } else { None };
+            let enabled = roll.is_none_or(|value| chance > value);
+            crate::decision_trace::event("skill-wit", || crate::json::obj(vec![
+                ("checked", Value::Bool(facts.wisdom_checked)), ("roll", roll.map_or(Value::Null, |v| crate::json::num(v as f64))),
+                ("threshold", crate::json::num(chance as f64)), ("passed", Value::Bool(enabled)),
+                ("drawStart", crate::json::num(draw_start as f64)), ("drawEnd", crate::json::num(rng.draw_count as f64))]));
             row.skill_enabled.insert(sid.clone(),enabled);
         }
     }
     stages.insert("after_wisdom".into(),rng.draw_count);
-    for (skills,row) in decoded.iter().zip(rows.iter_mut()) {
+    for (i,(skills,row)) in decoded.iter().zip(rows.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
         let mut multiplier=1.0f32;
         for (sid,facts) in skills {
             if !row.skill_enabled[sid] {continue;}
@@ -436,31 +469,41 @@ impl PreparedInitialization {
     pub(crate) fn initialize(&self, seed: i32) -> Result<Initialization, String> {
         let mut rng = RetailRandom::new(seed);
         let mut rows: Vec<_> = self.horses.iter().map(|_| HorseInitialization::default()).collect();
-        for (horse, row) in self.horses.iter().zip(&mut rows) {
+        for (i,(horse, row)) in self.horses.iter().zip(&mut rows).enumerate() {
+            let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
             for trigger in &horse.triggers {
+                let _skill = crate::decision_trace::skill(&trigger.skill_id, 0, "initialization");
                 let draw_start = rng.draw_count;
                 let windows = sample_trigger(&trigger.name, trigger.argument, &mut rng, &self.course)?;
                 row.triggers.push(Trigger { skill_id: trigger.skill_id.clone(), alternative: trigger.alternative,
                     field: trigger.field.clone(), name: trigger.name.clone(), argument: trigger.argument,
                     windows, draw_start, draw_end: rng.draw_count });
+                trace_trigger(row.triggers.last().unwrap());
             }
         }
         let mut stages = BTreeMap::from([("after_triggers".into(), rng.draw_count)]);
-        for (horse, row) in self.horses.iter().zip(&mut rows) {
+        for (i,(horse, row)) in self.horses.iter().zip(&mut rows).enumerate() {
+            let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
             let coefficient = horse.force_coefficient;
             let offset = if coefficient > 0. { rng.real(0., self.force_span) }
                 else if coefficient < 0. { rng.real(-self.force_span, 0.) } else { 0. };
             row.force_in_move_coefficient = coefficient + offset;
         }
         stages.insert("after_ai".into(), rng.draw_count);
-        for (horse, row) in self.horses.iter().zip(&mut rows) {
+        for (i,(horse, row)) in self.horses.iter().zip(&mut rows).enumerate() {
+            let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
             for (sid, checked) in &horse.skills {
-                let enabled = !checked || horse.wisdom_chance > rng.real(0., 100.);
+                let _skill = crate::decision_trace::skill(sid, 0, "initialization");
+                let draw_start = rng.draw_count;
+                let roll = if *checked { Some(rng.real(0., 100.)) } else { None };
+                let enabled = roll.is_none_or(|value| horse.wisdom_chance > value);
+                crate::decision_trace::event("skill-wit", || crate::json::obj(vec![("checked", Value::Bool(*checked)),("roll", roll.map_or(Value::Null, |v| crate::json::num(v as f64))),("threshold", crate::json::num((horse.wisdom_chance) as f64)),("passed", Value::Bool(enabled)),("drawStart", crate::json::num((draw_start) as f64)),("drawEnd", crate::json::num((rng.draw_count) as f64))]));
                 row.skill_enabled.insert(sid.clone(), enabled);
             }
         }
         stages.insert("after_wisdom".into(), rng.draw_count);
-        for (horse, row) in self.horses.iter().zip(&mut rows) {
+        for (i,(horse, row)) in self.horses.iter().zip(&mut rows).enumerate() {
+            let _trace = crate::decision_trace::runner(Some(i), 0., "initialization");
             let mut multiplier = 1.0_f32;
             for (sid, modifiers) in &horse.delay_modifiers {
                 if row.skill_enabled[sid] {
@@ -482,7 +525,8 @@ pub fn initialize_sections_and_rushing(init:&mut Initialization, horses:&[(f32,f
     if horses.len()!=init.horses.len() {return Err("Roster changed during initialization".into());}
     let base=20.0-(number(course,"distance")?-2000.0)/1000.0;
     let speeds=field(parameters,"BasetTargetSpeed")?;
-    for ((wisdom,_),row) in horses.iter().zip(init.horses.iter_mut()) {
+    for (i,((wisdom,_),row)) in horses.iter().zip(init.horses.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "sections");
         let logarithm=((*wisdom*0.1) as f64).log10() as f32;
         // Isolated section-only expression-store hypothesis. The logarithm is
         // still the baseline rounded result. Range results are float32 returns.
@@ -499,7 +543,8 @@ pub fn initialize_sections_and_rushing(init:&mut Initialization, horses:&[(f32,f
     }
     init.stages.insert("after_sections".into(),init.rng.draw_count);
     let temptation=field(parameters,"Temptation")?;
-    for ((wisdom,bonus),row) in horses.iter().zip(init.horses.iter_mut()) {
+    for (i,((wisdom,bonus),row)) in horses.iter().zip(init.horses.iter_mut()).enumerate() {
+        let _trace = crate::decision_trace::runner(Some(i), 0., "rushing-initialization");
         let term=*wisdom*0.1+1.0;
         let logarithm=((term*term) as f64).log10() as f32;
         let fraction=number(temptation,"TemptationStartPerVal1")?/logarithm;

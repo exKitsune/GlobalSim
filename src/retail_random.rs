@@ -52,6 +52,7 @@ impl RetailRandom {
         if value<0 {value=value.wrapping_add(i32::MAX);}
         self.state[self.a]=value;
         self.draw_count+=1;
+        crate::decision_trace::event("rng-draw", || crate::json::obj(vec![("draw", crate::json::num((self.draw_count) as f64)),("raw", crate::json::num((value) as f64))]));
         value
     }
 

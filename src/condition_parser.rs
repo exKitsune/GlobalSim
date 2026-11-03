@@ -205,7 +205,7 @@ fn parse_cmp(ts: &mut TokStream, conditions: &'static BTreeMap<String, Condition
             return Ok(Op::Fixed(trigger.windows));
         }
     }
-    Ok(Op::Cmp { cond, kind, arg })
+    Ok(Op::Cmp { name: name.to_string(), cond, kind, arg })
 }
 
 /// Parses one condition-expression string (e.g. `"phase==2&distance_rate>=50"`)

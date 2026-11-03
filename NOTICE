@@ -19,3 +19,8 @@ Third-party components retain their own copyright notices and license terms:
 
 The project license does not replace third-party licenses or grant rights to
 third-party game assets, names or data that the contributors do not own.
+
+Modifications by Umalytics contributors, 2026-11-03 (AGPL-3.0-only):
+Decision tracing, per-run trace isolation, and trace coalescing optimizations.
+See instrumentation.json for the exact instrumentation and source identities.
+Maintained source: https://github.com/exKitsune/GlobalSim

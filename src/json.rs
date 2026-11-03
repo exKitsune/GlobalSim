@@ -496,6 +496,12 @@ fn write_value(out: &mut String, v: &Value) {
                 write_replay_frames(out, arr);
                 return;
             }
+            // Decision-motion matrices repeat many identical numeric columns.
+            // Cache their exact text locally without changing the JSON schema.
+            if matches!(arr.first(), Some(Value::Array(_))) {
+                write_matrix(out, arr);
+                return;
+            }
             out.push('[');
             for (i, item) in arr.iter().enumerate() {
                 if i > 0 {
@@ -538,6 +544,25 @@ impl CachedNumber {
         }
         out.push_str(&self.text);
     }
+}
+
+fn write_matrix(out: &mut String, rows: &[Value]) {
+    let mut cache: Vec<CachedNumber> = Vec::new();
+    out.push('[');
+    for (i, row) in rows.iter().enumerate() {
+        if i > 0 { out.push(','); }
+        if let Value::Array(values) = row {
+            cache.resize_with(values.len(), CachedNumber::default);
+            out.push('[');
+            for (j, value) in values.iter().enumerate() {
+                if j > 0 { out.push(','); }
+                if let Value::Number(n) = value { cache[j].write(out, *n); }
+                else { write_value(out, value); }
+            }
+            out.push(']');
+        } else { write_value(out, row); }
+    }
+    out.push(']');
 }
 
 /// Incrementally encode frame batches while keeping numeric text caches local
@@ -645,7 +670,8 @@ fn write_number(out: &mut String, n: f64) {
         // `null` rather than emit invalid JSON if one ever slips through.
         out.push_str("null");
     } else if n == n.trunc() && n.abs() < 1e15 {
-        let _ = write!(out, "{}", n as i64);
+        if (-1.0..=30.0).contains(&n) { write_small_integer(out, n); }
+        else { let _ = write!(out, "{}", n as i64); }
     } else if !write_widened_f32(out, n) {
         let _ = write!(out, "{n}");
     }
@@ -1019,4 +1045,24 @@ mod tests {
         }
     }
 
+}
+
+#[cfg(test)]
+mod matrix_encoding_tests {
+    use super::*;
+    #[test]
+    fn cached_matrix_matches_independent_rows() {
+        let mut rows = Vec::new();
+        for i in 0..100 {
+            rows.push(Value::Array(vec![num(i as f64), num(-0.0), num(0.0), num(30.0),
+                num(31.0), num(-1.0), num(-2.0), num(1.234567890123),
+                num(if i % 2 == 0 { f64::NAN } else { f64::INFINITY }),
+                Value::String("escaped\\name".into())]));
+        }
+        rows.push(Value::Null);
+        rows.push(Value::Array(vec![]));
+        rows.push(Value::Array(vec![num(0.5)]));
+        let expected = format!("[{}]", rows.iter().map(to_string).collect::<Vec<_>>().join(","));
+        assert_eq!(to_string(&Value::Array(rows)), expected);
+    }
 }

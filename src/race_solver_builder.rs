@@ -519,6 +519,10 @@ fn build_skill_data(
 
     let mut triggers: Vec<SkillData> = Vec::new();
     for (alt_index,alt) in def.alternatives.iter().enumerate() {
+        let _trace = crate::decision_trace::skill(skill_id, alt_index, "build-condition");
+        crate::decision_trace::event("skill-definition", || crate::json::obj(vec![
+            ("condition", crate::json::Value::String(alt.condition.clone())),
+            ("precondition", crate::json::Value::String(alt.precondition.clone().unwrap_or_default()))]));
         let parse = |expression:&str,column:&str| condition_parser::parse_with_retail_runtime(
             conditions,expression,sampled.map(|index| {
                 let triggers = sampled_triggers_for(index, skill_id, alt_index, column);
@@ -891,7 +895,7 @@ impl RaceSolverBuilder {
             let key = (skill_id.clone(), *perspective, *level, *repeat, trigger_horse.strategy as u8,
                 retail.is_some(), retail.is_some_and(|row| row.runtime_phase));
             *repeat += 1;
-            if let Some(cached) = self.skill_cache.as_ref().and_then(|cache| cache.borrow().get(&key).cloned()) {
+            if let Some(cached) = self.skill_cache.as_ref().filter(|_| !crate::decision_trace::enabled()).and_then(|cache| cache.borrow().get(&key).cloned()) {
                 skilldata.extend(cached);
                 continue;
             }
